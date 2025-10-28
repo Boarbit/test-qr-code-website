@@ -1,0 +1,24 @@
+[project]
+name = "container-tracker-backend"
+version = "0.1.0"
+description = "Backend for container tracker with QR codes"
+authors = [
+    {name = "Carl Ramfelt",email = "46245936+Boarbit@users.noreply.github.com"}
+]
+readme = "README.md"
+requires-python = "^3.11"
+dependencies = [
+    "fastapi (>=0.119.0,<0.120.0)",
+    "uvicorn (>=0.37.0,<0.38.0)",
+    "sqlalchemy (>=2.0.44,<3.0.0)",
+    "psycopg2-binary (>=2.9.11,<3.0.0)",
+    "pydantic (>=2.12.2,<3.0.0)",
+    "qrcode (>=8.2,<9.0)",
+    "pillow (>=12.0.0,<13.0.0)",
+    "python-dotenv (>=1.1.1,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
