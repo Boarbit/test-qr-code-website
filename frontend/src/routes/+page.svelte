@@ -2,12 +2,17 @@
   'use legacy';
   import { get } from 'svelte/store';
   import { API_URL, MOCK_USER_HEADER, PERMISSIONS } from '$lib/config';
+  import QrScanner from '$lib/components/QrScanner.svelte';
   import { activeUser, hasPermission } from '$lib/stores/mockUsers';
   import type { MockUser } from '$lib/stores/mockUsers';
+
+  type ItemDetailArray = Array<{ label: string; value: string }>;
+  type ItemDetails = Record<string, string> | ItemDetailArray;
 
   type Item = {
     name: string;
     quantity: number;
+    details?: ItemDetails;
   };
 
   type ContainerDto = {
@@ -31,10 +36,21 @@
   let searchError = '';
 
   let activePersona: MockUser | null = null;
+  let canView = false;
   let canCreate = false;
+  let canDelete = false;
+
+  let deleteLoading = false;
+  let deleteTarget = '';
+  let deleteError = '';
+  let deleteSuccess = '';
 
   $: activePersona = $activeUser ?? null;
+  $: canView = hasPermission(activePersona, PERMISSIONS.view);
   $: canCreate = hasPermission(activePersona, PERMISSIONS.create);
+  $: canDelete = Boolean(
+    hasPermission(activePersona, PERMISSIONS.update) || hasPermission(activePersona, PERMISSIONS.create)
+  );
 
   function authHeaders() {
     const user = get(userStore);
@@ -60,6 +76,8 @@
     manageError = '';
     manageSuccess = '';
     container = null;
+    deleteError = '';
+    deleteSuccess = '';
 
     try {
       const res = await fetch(`${API_URL}/containers/${trimmed}`, {
@@ -92,6 +110,8 @@
     searchLoading = true;
     searchError = '';
     searchResults = [];
+    deleteError = '';
+    deleteSuccess = '';
 
     try {
       const res = await fetch(`${API_URL}/containers?search=${encodeURIComponent(query)}`, {
@@ -127,6 +147,120 @@
     const query = user ? `?mock_user=${encodeURIComponent(user.id)}` : '';
     return `${API_URL}/containers/${qr}/qrcode${query}`;
   }
+
+  function formatFieldLabel(label: string) {
+    return label
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function detailEntries(details?: ItemDetails) {
+    if (!details) {
+      return [];
+    }
+
+    if (Array.isArray(details)) {
+      return details
+        .map(({ label, value }) => [label?.trim(), value?.trim()] as [string, string])
+        .filter(([label, value]) => Boolean(label) && Boolean(value));
+    }
+
+    return Object.entries(details)
+      .map(([label, value]) => [label.trim(), value?.trim() ?? ''])
+      .filter(([label, value]) => Boolean(label) && Boolean(value));
+  }
+
+  function itemExtraFields(item: Item) {
+    const extras: [string, string][] = [];
+
+    for (const [key, value] of Object.entries(item)) {
+      if (key === 'name' || key === 'quantity' || key === 'details') {
+        continue;
+      }
+
+      const rendered = value == null ? '' : String(value);
+      if (rendered.trim()) {
+        extras.push([formatFieldLabel(key), rendered]);
+      }
+    }
+
+    for (const [label, value] of detailEntries(item.details)) {
+      extras.push([label, value]);
+    }
+
+    console.log('Item extras processed', { item, extras });
+
+    return extras;
+  }
+
+  function handleScannerResult(result: string) {
+    const trimmed = result.trim();
+    if (!trimmed) {
+      manageError = 'Scanning returned a blank QR code.';
+      manageSuccess = '';
+      return;
+    }
+
+    qrInput = trimmed;
+    void fetchContainer(trimmed);
+  }
+
+  async function deleteContainerByQr(qr: string) {
+    if (!canDelete) return;
+
+    const trimmed = qr.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    deleteLoading = true;
+    deleteTarget = trimmed;
+    deleteError = '';
+    deleteSuccess = '';
+
+    try {
+      const res = await fetch(`${API_URL}/containers/${encodeURIComponent(trimmed)}`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to delete container');
+      }
+
+      if (container?.qr_code === trimmed) {
+        container = null;
+        manageSuccess = '';
+      }
+
+      searchResults = searchResults.filter((result) => result.qr_code !== trimmed);
+      if (qrInput === trimmed) {
+        qrInput = '';
+      }
+
+      deleteSuccess = `Container ${trimmed} deleted.`;
+    } catch (err) {
+      deleteError = err instanceof Error ? err.message : 'Failed to delete container';
+    } finally {
+      deleteLoading = false;
+      deleteTarget = '';
+    }
+  }
+
+  function requestDelete(qr: string) {
+    if (!canDelete) {
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm(`Delete container ${qr}? This cannot be undone.`);
+      if (!confirmed) {
+        return;
+      }
+    }
+    void deleteContainerByQr(qr);
+  }
+
 </script>
 
 <main class="page">
@@ -165,18 +299,25 @@
         {/each}
       </div>
 
-      <div class="scan-placeholder">
-        <div class="scan-header">
-          <h3>Scan to load a container</h3>
-          <p class="muted">Use your camera to scan a QR label and auto-fill the code above.</p>
-        </div>
-        <div class="scan-box">
-          <span class="scan-text">Camera preview placeholder</span>
-        </div>
-        <button class="secondary" type="button" disabled>
-          Camera scanning coming soon
-        </button>
-      </div>
+      {#if deleteError}
+        <p class="error">{deleteError}</p>
+      {:else if deleteSuccess}
+        <p class="success">{deleteSuccess}</p>
+      {/if}
+
+      <QrScanner
+        title="Scan to load a container"
+        description="Use your camera to scan a QR label and auto-fill the code above."
+        on:detect={(event) => handleScannerResult(event.detail.text)}
+      >
+        <svelte:fragment slot="tips">
+          <ul>
+            <li>Center the QR label and hold still until it focuses.</li>
+            <li>Once detected, we’ll look up the container automatically.</li>
+            <li>Need a sample? Try the quick load buttons above.</li>
+          </ul>
+        </svelte:fragment>
+      </QrScanner>
 
       {#if manageLoading}
         <p class="info">Looking up container...</p>
@@ -192,11 +333,33 @@
           <p class="qr-code-label">QR: {container.qr_code}</p>
 
           {#each container.contents as item}
+            {@const extras = itemExtraFields(item)}
             <div class="content-card">
               <div class="content-name">{item.name}</div>
               <div class="content-quantity">Quantity: {item.quantity}</div>
+              {#if extras.length}
+                <dl class="item-details">
+                  {#each extras as [label, value]}
+                    <div class="item-detail-row">
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  {/each}
+                </dl>
+              {/if}
             </div>
           {/each}
+
+          {#if canDelete}
+            <button
+              type="button"
+              class="danger"
+              onclick={() => requestDelete(container.qr_code)}
+              disabled={deleteLoading && deleteTarget === container.qr_code}
+            >
+              {deleteLoading && deleteTarget === container.qr_code ? 'Deleting…' : 'Delete container'}
+            </button>
+          {/if}
 
         </div>
       {/if}
@@ -242,20 +405,43 @@
                   <span class="result-name">{result.name}</span>
                   <span class="result-qr">{result.qr_code}</span>
                 </div>
-                <button
-                  type="button"
-                  class="link-button"
-                  onclick={() => {
-                    qrInput = result.qr_code;
-                    fetchContainer(result.qr_code);
-                  }}
-                >View details</button>
+                <div class="result-actions">
+                  <button
+                    type="button"
+                    class="link-button"
+                    onclick={() => {
+                      qrInput = result.qr_code;
+                      fetchContainer(result.qr_code);
+                    }}
+                  >View details</button>
+                  {#if canDelete}
+                    <button
+                      type="button"
+                      class="danger-text"
+                      onclick={() => requestDelete(result.qr_code)}
+                      disabled={deleteLoading && deleteTarget === result.qr_code}
+                    >
+                      {deleteLoading && deleteTarget === result.qr_code ? 'Deleting…' : 'Delete'}
+                    </button>
+                  {/if}
+                </div>
               </div>
               {#if result.contents?.length}
                 {#each result.contents as item}
+                  {@const extras = itemExtraFields(item)}
                   <div class="result-item">
                     <div class="content-name">{item.name}</div>
                     <div class="content-quantity">Quantity: {item.quantity}</div>
+                    {#if extras.length}
+                      <dl class="item-details">
+                        {#each extras as [label, value]}
+                          <div class="item-detail-row">
+                            <dt>{label}</dt>
+                            <dd>{value}</dd>
+                          </div>
+                        {/each}
+                      </dl>
+                    {/if}
                   </div>
                 {/each}
               {:else}
@@ -266,6 +452,7 @@
         </ul>
       {/if}
     </section>
+
   </div>
 
   <section class="card instructions-card">
@@ -390,6 +577,28 @@
     color: #f6f6f6;
   }
 
+  button.danger {
+    background: var(--color-danger, #c62828);
+    color: #fff;
+  }
+
+  button.danger:hover {
+    background: var(--color-danger-hover, #b71c1c);
+  }
+
+  button.danger-text {
+    background: transparent;
+    color: var(--color-danger, #c62828);
+    border: none;
+    padding: 6px 12px;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+
+  button.danger-text:hover {
+    text-decoration: underline;
+  }
+
   button.secondary:hover {
     background: var(--color-secondary-hover);
   }
@@ -416,52 +625,6 @@
     margin-bottom: 12px;
     font-size: 0.95rem;
     color: var(--color-text-muted);
-  }
-
-  .scan-placeholder {
-    margin: 16px 0 20px;
-    padding: 18px;
-    border: 2px dashed var(--color-secondary);
-    border-radius: 12px;
-    background: var(--color-surface-overlay);
-  }
-
-  .scan-header h3 {
-    margin: 0;
-    font-size: 1.1rem;
-    color: var(--color-text);
-  }
-
-  .scan-header p {
-    margin: 6px 0 14px;
-    color: var(--color-text-muted);
-  }
-
-  .scan-box {
-    height: 140px;
-    border-radius: 12px;
-    background: repeating-linear-gradient(
-      135deg,
-      var(--color-chip),
-      var(--color-chip) 12px,
-      var(--color-bg) 12px,
-      var(--color-bg) 24px
-    );
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--color-secondary);
-    font-weight: 600;
-    letter-spacing: 0.04em;
-  }
-
-  .scan-text {
-    text-transform: uppercase;
-    font-size: 0.8rem;
-  }
-
-  .scan-placeholder button {
-    margin-top: 14px;
   }
 
   .info,
@@ -511,6 +674,7 @@
     border: 1px solid var(--color-divider);
   }
 
+
   .content-name {
     font-weight: 600;
     margin-bottom: 4px;
@@ -520,6 +684,32 @@
   .content-quantity {
     color: var(--color-text-muted);
     margin-bottom: 8px;
+  }
+
+  .item-details {
+    margin: 8px 0 0;
+    display: grid;
+    gap: 6px;
+  }
+
+  .item-detail-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 1fr) 2fr;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--color-card);
+    border-radius: 8px;
+  }
+
+  .item-detail-row dt {
+    margin: 0;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .item-detail-row dd {
+    margin: 0;
+    color: var(--color-text-muted);
   }
 
   .muted {
@@ -567,6 +757,12 @@
     border-radius: 12px;
     padding: 12px 16px;
     background: var(--color-card-tertiary);
+  }
+
+  .result-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
   }
 
   .result-header {

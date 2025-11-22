@@ -6,9 +6,13 @@
   import { activeUser, hasPermission } from '$lib/stores/mockUsers';
   import type { MockUser } from '$lib/stores/mockUsers';
 
+  type ItemDetailArray = Array<{ label: string; value: string }>;
+  type ItemDetails = Record<string, string> | ItemDetailArray;
+
   type Item = {
     name: string;
     quantity: number;
+    details?: ItemDetails;
   };
 
   type ContainerDto = {
@@ -26,16 +30,26 @@
 
   let activePersona: MockUser | null = null;
   let canView = false;
+  let canDelete = false;
   let qrCode = '';
   let loadSequence = 0;
+  let deleteLoading = false;
+  let deleteError = '';
+  let deleteSuccess = '';
 
   $: activePersona = $activeUser ?? null;
   $: qrCode = $pageStore.params.qr_code ?? '';
   $: canView = Boolean(activePersona && hasPermission(activePersona, PERMISSIONS.view));
+  $: canDelete = Boolean(
+    activePersona &&
+      (hasPermission(activePersona, PERMISSIONS.update) || hasPermission(activePersona, PERMISSIONS.create))
+  );
 
   $: {
     const code = qrCode;
     const persona = activePersona;
+    deleteError = '';
+    deleteSuccess = '';
 
     if (!code) {
       container = null;
@@ -94,6 +108,77 @@
     return {
       [MOCK_USER_HEADER]: user.id
     };
+  }
+
+  function normalizeDetailEntries(details?: ItemDetails) {
+    if (!details) {
+      return [];
+    }
+
+    if (Array.isArray(details)) {
+      return details
+        .map(({ label, value }) => [label?.trim(), value?.trim()] as [string, string])
+        .filter(([label, value]) => Boolean(label) && Boolean(value));
+    }
+
+    return Object.entries(details)
+      .map(([label, value]) => [label.trim(), value?.trim() ?? ''])
+      .filter(([label, value]) => Boolean(label) && Boolean(value));
+  }
+
+  async function deleteCurrentContainer() {
+    if (!canDelete || !container?.qr_code) {
+      return;
+    }
+
+    const trimmed = container.qr_code.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    deleteLoading = true;
+    deleteError = '';
+    deleteSuccess = '';
+
+    try {
+      const res = await fetch(`${API_URL}/containers/${encodeURIComponent(trimmed)}`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to delete container');
+      }
+
+      deleteSuccess = `Container ${trimmed} deleted.`;
+      container = null;
+    } catch (err) {
+      deleteError = err instanceof Error ? err.message : 'Failed to delete container';
+    } finally {
+      deleteLoading = false;
+    }
+  }
+
+  function extraEntries(item: Item) {
+    const extras: [string, string][] = [];
+
+    for (const [key, value] of Object.entries(item)) {
+      if (key === 'name' || key === 'quantity' || key === 'details') continue;
+      const rendered = value == null ? '' : String(value);
+      if (rendered.trim()) {
+        extras.push([
+          key
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (char) => char.toUpperCase()),
+          rendered
+        ]);
+      }
+    }
+
+    extras.push(...normalizeDetailEntries(item.details));
+
+    return extras;
   }
 </script>
 
@@ -159,6 +244,32 @@
     color: var(--color-text-muted);
   }
 
+  .item-details {
+    margin: 8px 0 0;
+    display: grid;
+    gap: 6px;
+  }
+
+  .item-detail-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) 2fr;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--color-card);
+    border-radius: 8px;
+  }
+
+  .item-detail-row dt {
+    margin: 0;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .item-detail-row dd {
+    margin: 0;
+    color: var(--color-text-muted);
+  }
+
   .loading,
   .error,
   .no-data {
@@ -176,9 +287,29 @@
     font-weight: bold;
   }
 
+  .success {
+    color: var(--color-success, #2e7d32);
+    font-weight: bold;
+  }
+
   .no-data {
     color: var(--color-text-muted);
     font-style: italic;
+  }
+
+  button.danger {
+    border: none;
+    border-radius: 999px;
+    padding: 10px 18px;
+    font-weight: 600;
+    background: var(--color-danger, #c62828);
+    color: #fff;
+    cursor: pointer;
+  }
+
+  button.danger:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 </style>
 
@@ -196,12 +327,44 @@
       <p class="container-qr">QR: {container.qr_code}</p>
     </div>
 
+    {#if deleteError}
+      <p class="error">{deleteError}</p>
+    {:else if deleteSuccess}
+      <p class="success">{deleteSuccess}</p>
+    {/if}
+
     {#each container.contents as item}
       <div class="content-card">
+        {@const extras = extraEntries(item)}
         <div class="content-name">{item.name}</div>
         <div class="content-quantity">Quantity: {item.quantity}</div>
+        {#if extras.length}
+          <dl class="item-details">
+            {#each extras as [label, value]}
+              <div class="item-detail-row">
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            {/each}
+          </dl>
+        {/if}
       </div>
     {/each}
+
+    {#if canDelete}
+      <button
+        type="button"
+        class="danger"
+        onclick={() => {
+          if (typeof window === 'undefined' || window.confirm(`Delete container ${container?.qr_code}?`)) {
+            void deleteCurrentContainer();
+          }
+        }}
+        disabled={deleteLoading}
+      >
+        {deleteLoading ? 'Deleting…' : 'Delete container'}
+      </button>
+    {/if}
   </div>
 {:else}
   <p class="no-data">No container data found.</p>

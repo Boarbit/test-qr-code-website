@@ -187,6 +187,20 @@
           class:active={$pageStore.url.pathname.startsWith('/create')}
         >Create Container</a>
       {/if}
+      {#if $canUpdate}
+        <a
+          class="nav-link"
+          href="/update"
+          class:active={$pageStore.url.pathname.startsWith('/update')}
+        >Update Container</a>
+      {/if}
+      {#if $canView}
+        <a
+          class="nav-link"
+          href="/export"
+          class:active={$pageStore.url.pathname.startsWith('/export')}
+        >Export CSV</a>
+      {/if}
     </nav>
     <div class="header-actions">
       <button
@@ -824,6 +838,8 @@ let activePersona = activeUser;
 
 // canCreate / canAssign use $activePersona to unwrap
 let canCreate = derived(activePersona, $ap => hasPermission($ap, PERMISSIONS.create));
+let canUpdate = derived(activePersona, $ap => hasPermission($ap, PERMISSIONS.update));
+let canView = derived(activePersona, $ap => hasPermission($ap, PERMISSIONS.view));
 let canAssign = derived(activePersona, $ap => Boolean($ap?.is_admin));
 let isAuthenticated = derived(activePersona, ($ap) => Boolean($ap));
 let personaOptions = derived(usersStore, ($users) => $users);
@@ -997,6 +1013,20 @@ async function handleRoleChange(event: Event) {
           href="/create"
           class:active={$pageStore.url.pathname.startsWith('/create')}
         >Create Container</a>
+      {/if}
+      {#if $canUpdate}
+        <a
+          class="nav-link"
+          href="/update"
+          class:active={$pageStore.url.pathname.startsWith('/update')}
+        >Update Container</a>
+      {/if}
+      {#if $canView}
+        <a
+          class="nav-link"
+          href="/export"
+          class:active={$pageStore.url.pathname.startsWith('/export')}
+        >Export CSV</a>
       {/if}
     </nav>
     <div class="header-actions">

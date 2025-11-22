@@ -36,3 +36,8 @@ npm run build
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+
+## CSV exports
+
+- Visit `/export` in the frontend to pick container/item columns, control how detail fields are handled, and optionally filter which items are included before downloading a CSV.
+- The backend also exposes `GET /containers/export`, which accepts repeated `container_fields`, `item_fields`, `detail_keys`, and `item_filter` query params. Filters follow a `field:value` syntax where fields can be `name`, `quantity`, or `detail.<label>`.

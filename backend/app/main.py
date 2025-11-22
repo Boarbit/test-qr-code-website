@@ -2,7 +2,8 @@ from fastapi import Depends, FastAPI, HTTPException, Header, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import csv
 import io
 import os
 import qrcode
@@ -21,6 +22,7 @@ app.add_middleware(
 class Item(BaseModel):
     name: str
     quantity: int = Field(..., ge=0, description="Number of units for the item")
+    details: Optional[Dict[str, str]] = None
 
 
 class Container(BaseModel):
@@ -48,6 +50,12 @@ ROLE_PERMISSIONS: Dict[str, List[str]] = {
     "Creator": [VIEW_PERMISSION, CREATE_PERMISSION],
     "Admin": [VIEW_PERMISSION, UPDATE_PERMISSION, CREATE_PERMISSION, ASSIGN_PERMISSION],
 }
+
+DEFAULT_CONTAINER_FIELDS = ["qr_code", "name"]
+ALLOWED_CONTAINER_FIELDS = set(DEFAULT_CONTAINER_FIELDS)
+
+DEFAULT_ITEM_FIELDS = ["name", "quantity"]
+ALLOWED_ITEM_FIELDS = set(DEFAULT_ITEM_FIELDS)
 
 
 _mock_users = [
@@ -146,6 +154,82 @@ def require_permission(user: MockUser, permission: str) -> None:
         raise HTTPException(status_code=403, detail="Insufficient permissions for this action")
 
 
+def normalize_field_list(
+    values: Optional[List[str]], allowed: set, default_fields: List[str]
+) -> List[str]:
+    if values is None:
+        return list(default_fields)
+
+    normalized: List[str] = []
+    seen = set()
+    for value in values:
+        trimmed = value.strip()
+        if not trimmed:
+            continue
+        if trimmed not in allowed:
+            raise HTTPException(status_code=400, detail=f"Unknown field '{trimmed}'")
+        if trimmed not in seen:
+            normalized.append(trimmed)
+            seen.add(trimmed)
+
+    return normalized
+
+
+def normalize_detail_keys(keys: Optional[List[str]]) -> Tuple[List[str], bool]:
+    if keys is None:
+        return [], False
+
+    normalized: List[str] = []
+    seen = set()
+    for key in keys:
+        trimmed = key.strip()
+        if trimmed and trimmed not in seen:
+            normalized.append(trimmed)
+            seen.add(trimmed)
+    return normalized, True
+
+
+def parse_item_filters(raw_filters: Optional[List[str]]) -> List[Tuple[str, str]]:
+    parsed: List[Tuple[str, str]] = []
+    if not raw_filters:
+        return parsed
+
+    for raw in raw_filters:
+        field, separator, value = raw.partition(":")
+        field = field.strip()
+        value = value.strip()
+        if not separator or not field or not value:
+            raise HTTPException(
+                status_code=400, detail="Filters must be formatted as field:value pairs"
+            )
+        parsed.append((field, value))
+
+    return parsed
+
+
+def item_matches_filters(item: Item, filters: List[Tuple[str, str]]) -> bool:
+    for field, expected in filters:
+        expected_lower = expected.lower()
+        if field == "name":
+            if expected_lower not in item.name.lower():
+                return False
+        elif field == "quantity":
+            if str(item.quantity) != expected:
+                return False
+        elif field.startswith("detail."):
+            key = field.split(".", 1)[1]
+            details = item.details or {}
+            value = details.get(key)
+            if value is None or expected_lower not in value.lower():
+                return False
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Filters support 'name', 'quantity', or 'detail.<key>' fields",
+            )
+    return True
+
+
 class RoleUpdate(BaseModel):
     role: str
 
@@ -214,13 +298,107 @@ def list_containers(search: Optional[str] = None, current_user: MockUser = Depen
     return [Container(**data) for data in results]
 
 
+@app.get("/containers/export")
+def export_containers_csv(
+    container_fields: Optional[List[str]] = Query(default=None),
+    item_fields: Optional[List[str]] = Query(default=None),
+    detail_keys: Optional[List[str]] = Query(default=None),
+    item_filter: Optional[List[str]] = Query(default=None),
+    current_user: MockUser = Depends(get_current_user),
+):
+    require_permission(current_user, VIEW_PERMISSION)
+
+    resolved_container_fields = normalize_field_list(
+        container_fields, ALLOWED_CONTAINER_FIELDS, DEFAULT_CONTAINER_FIELDS
+    )
+    resolved_item_fields = normalize_field_list(
+        item_fields, ALLOWED_ITEM_FIELDS, DEFAULT_ITEM_FIELDS
+    )
+    normalized_detail_keys, detail_keys_requested = normalize_detail_keys(detail_keys)
+    filters = parse_item_filters(item_filter)
+    has_filters = bool(filters)
+
+    prepared_rows: List[Tuple[Container, Optional[Item]]] = []
+    auto_detail_keys: List[str] = []
+    seen_detail_keys = set()
+    include_items = bool(resolved_item_fields or normalized_detail_keys or detail_keys_requested)
+
+    for data in containers.values():
+        container = Container(**data)
+        contents = list(container.contents or [])
+        if has_filters:
+            matching_items = [item for item in contents if item_matches_filters(item, filters)]
+            if not matching_items:
+                continue
+            row_items: List[Optional[Item]] = matching_items
+        else:
+            row_items = contents or [None]
+
+        if include_items:
+            for item in row_items:
+                prepared_rows.append((container, item))
+                if item and item.details:
+                    for key in item.details.keys():
+                        if key not in seen_detail_keys:
+                            seen_detail_keys.add(key)
+                            auto_detail_keys.append(key)
+        else:
+            prepared_rows.append((container, None))
+
+    selected_detail_keys = normalized_detail_keys if detail_keys_requested else auto_detail_keys
+
+    header: List[str] = []
+    header.extend([f"container_{field}" for field in resolved_container_fields])
+    header.extend([f"item_{field}" for field in resolved_item_fields])
+    header.extend([f"detail_{key}" for key in selected_detail_keys])
+
+    if not header:
+        raise HTTPException(status_code=400, detail="Select at least one column to export.")
+
+    def stream_rows():
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow(header)
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+
+        for container, item in prepared_rows:
+            row: List[str] = []
+            for field in resolved_container_fields:
+                value = getattr(container, field, "")
+                row.append("" if value is None else str(value))
+
+            for field in resolved_item_fields:
+                if item is None:
+                    row.append("")
+                else:
+                    value = getattr(item, field, "")
+                    row.append("" if value is None else str(value))
+
+            detail_source = item.details if (item and item.details) else {}
+            for key in selected_detail_keys:
+                detail_value = detail_source.get(key)
+                row.append("" if detail_value is None else str(detail_value))
+
+            writer.writerow(row)
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    filename = "containers-export.csv"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(stream_rows(), media_type="text/csv", headers=headers)
+
+
 @app.get("/containers/{qr_code}", response_model=Container)
 def get_container(qr_code: str, current_user: MockUser = Depends(get_current_user)):
     require_permission(current_user, VIEW_PERMISSION)
     data = containers.get(qr_code)
     if not data:
         raise HTTPException(status_code=404, detail="Container not found")
-    # print(data)
+    print(f"[GET /containers/{qr_code}] returning:", data, flush=True)
     return Container(**data)
 
 
@@ -244,7 +422,9 @@ def create_container(container: Container, current_user: MockUser = Depends(get_
     if container.qr_code in containers:
         raise HTTPException(status_code=400, detail="Container with this QR code already exists")
 
-    containers[container.qr_code] = container.dict()
+    payload = container.dict()
+    print("[POST /containers] received:", payload, flush=True)
+    containers[container.qr_code] = payload
     return container
 
 
