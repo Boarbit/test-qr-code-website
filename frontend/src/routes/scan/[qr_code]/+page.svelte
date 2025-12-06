@@ -55,11 +55,10 @@
       container = null;
       error = '';
       loading = false;
-      return;
+    } else {
+      const requestId = ++loadSequence;
+      loadContainer(code, persona, requestId);
     }
-
-    const requestId = ++loadSequence;
-    loadContainer(code, persona, requestId);
   }
 
   async function loadContainer(code: string, persona: MockUser | null, requestId: number) {

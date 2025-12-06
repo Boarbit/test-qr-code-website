@@ -1,4 +1,4 @@
-export const API_URL = 'http://localhost:8000';
+export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 export const MOCK_USER_HEADER = 'X-Mock-User';
 export const PERMISSIONS = {
   view: 'view',

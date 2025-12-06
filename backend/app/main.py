@@ -5,8 +5,13 @@ from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Tuple
 import csv
 import io
+import json
 import os
 import qrcode
+from sqlalchemy.orm import Session
+
+from .database import Base, engine, get_db, SessionLocal
+from . import models, crud
 
 app = FastAPI(title="Container Tracker (Static)")
 
@@ -129,9 +134,71 @@ _initial_containers = [
     ),
 ]
 
-containers: Dict[str, Dict] = {
-    container.qr_code: container.dict() for container in _initial_containers
-}
+Base.metadata.create_all(bind=engine)
+
+
+def seed_initial_data():
+    db = SessionLocal()
+    try:
+        if crud.count_containers(db) == 0:
+            for container in _initial_containers:
+                crud.create_container(
+                    db,
+                    qr_code=container.qr_code,
+                    name=container.name,
+                    items=[
+                        {
+                            "name": item.name,
+                            "quantity": item.quantity,
+                            "details": item.details,
+                        }
+                        for item in container.contents
+                    ],
+                )
+    finally:
+        db.close()
+
+
+seed_initial_data()
+
+
+def item_model_to_schema(model: models.ItemModel) -> Item:
+    details = None
+    if model.details:
+        try:
+            details = json.loads(model.details)
+        except json.JSONDecodeError:
+            details = None
+    return Item(name=model.name, quantity=model.quantity, details=details)
+
+
+def container_model_to_schema(model: models.ContainerModel) -> Container:
+    return Container(
+        qr_code=model.qr_code,
+        name=model.name,
+        contents=[item_model_to_schema(item) for item in model.items],
+    )
+
+
+def serialized_items_from_container(container: Container) -> List[Dict]:
+    return [
+        {"name": item.name, "quantity": item.quantity, "details": item.details}
+        for item in container.contents
+    ]
+
+
+def matches_search(container: Container, term: str) -> bool:
+    lowered = term.lower()
+    if lowered in container.qr_code.lower() or lowered in container.name.lower():
+        return True
+
+    for item in container.contents:
+        if lowered in item.name.lower():
+            return True
+        quantity_text = str(item.quantity)
+        if quantity_text and lowered in quantity_text.lower():
+            return True
+    return False
 
 
 def get_current_user(
@@ -275,27 +342,19 @@ def list_roles(current_user: MockUser = Depends(get_current_user)):
 
 
 @app.get("/containers", response_model=List[Container])
-def list_containers(search: Optional[str] = None, current_user: MockUser = Depends(get_current_user)):
+def list_containers(
+    search: Optional[str] = None,
+    current_user: MockUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     require_permission(current_user, VIEW_PERMISSION)
-    """Return all containers or those matching the search term."""
-    results = containers.values()
+    records = crud.list_containers(db)
+    containers_list = [container_model_to_schema(record) for record in records]
+
     if search:
-        term = search.lower()
-        filtered = []
-        for data in results:
-            if term in data["qr_code"].lower() or term in data["name"].lower():
-                filtered.append(data)
-                continue
+        containers_list = [container for container in containers_list if matches_search(container, search)]
 
-            for item in data.get("contents", []):
-                item_name = item.get("name", "").lower()
-                quantity_text = str(item.get("quantity", "")).lower()
-                if term in item_name or (quantity_text and term in quantity_text):
-                    filtered.append(data)
-                    break
-        results = filtered
-
-    return [Container(**data) for data in results]
+    return containers_list
 
 
 @app.get("/containers/export")
@@ -305,6 +364,7 @@ def export_containers_csv(
     detail_keys: Optional[List[str]] = Query(default=None),
     item_filter: Optional[List[str]] = Query(default=None),
     current_user: MockUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     require_permission(current_user, VIEW_PERMISSION)
 
@@ -323,8 +383,10 @@ def export_containers_csv(
     seen_detail_keys = set()
     include_items = bool(resolved_item_fields or normalized_detail_keys or detail_keys_requested)
 
-    for data in containers.values():
-        container = Container(**data)
+    records = crud.list_containers(db)
+    containers_list = [container_model_to_schema(record) for record in records]
+
+    for container in containers_list:
         contents = list(container.contents or [])
         if has_filters:
             matching_items = [item for item in contents if item_matches_filters(item, filters)]
@@ -393,45 +455,80 @@ def export_containers_csv(
 
 
 @app.get("/containers/{qr_code}", response_model=Container)
-def get_container(qr_code: str, current_user: MockUser = Depends(get_current_user)):
+def get_container(
+    qr_code: str,
+    current_user: MockUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     require_permission(current_user, VIEW_PERMISSION)
-    data = containers.get(qr_code)
+    data = crud.get_container_by_qr(db, qr_code)
     if not data:
         raise HTTPException(status_code=404, detail="Container not found")
-    print(f"[GET /containers/{qr_code}] returning:", data, flush=True)
-    return Container(**data)
+    return container_model_to_schema(data)
 
 
 @app.put("/containers/{qr_code}", response_model=Container)
 def update_container(
-    qr_code: str, container: Container, current_user: MockUser = Depends(get_current_user)
+    qr_code: str,
+    container: Container,
+    current_user: MockUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     require_permission(current_user, UPDATE_PERMISSION)
-    if qr_code not in containers:
+    existing = crud.get_container_by_qr(db, qr_code)
+    if not existing:
         raise HTTPException(status_code=404, detail="Container not found")
     if container.qr_code != qr_code:
         raise HTTPException(status_code=400, detail="QR code mismatch")
 
-    containers[qr_code] = container.dict()
-    return container
+    updated = crud.update_container(
+        db,
+        existing,
+        name=container.name,
+        items=serialized_items_from_container(container),
+    )
+    return container_model_to_schema(updated)
+
+
+@app.delete("/containers/{qr_code}", status_code=204)
+def delete_container_endpoint(
+    qr_code: str,
+    current_user: MockUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_permission(current_user, UPDATE_PERMISSION)
+    existing = crud.get_container_by_qr(db, qr_code)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    crud.delete_container(db, existing)
 
 
 @app.post("/containers", response_model=Container, status_code=201)
-def create_container(container: Container, current_user: MockUser = Depends(get_current_user)):
+def create_container(
+    container: Container,
+    current_user: MockUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     require_permission(current_user, CREATE_PERMISSION)
-    if container.qr_code in containers:
+    existing = crud.get_container_by_qr(db, container.qr_code)
+    if existing:
         raise HTTPException(status_code=400, detail="Container with this QR code already exists")
 
-    payload = container.dict()
-    print("[POST /containers] received:", payload, flush=True)
-    containers[container.qr_code] = payload
-    return container
+    saved = crud.create_container(
+        db,
+        qr_code=container.qr_code,
+        name=container.name,
+        items=serialized_items_from_container(container),
+    )
+    return container_model_to_schema(saved)
 
 
 @app.get("/containers/{qr_code}/qrcode", responses={200: {"content": {"image/png": {}}}})
-def generate_qr(qr_code: str, current_user: MockUser = Depends(get_current_user)):
+def generate_qr(qr_code: str, current_user: MockUser = Depends(get_current_user), db: Session = Depends(get_db)):
     require_permission(current_user, VIEW_PERMISSION)
-    if qr_code not in containers:
+    existing = crud.get_container_by_qr(db, qr_code)
+    if not existing:
         raise HTTPException(status_code=404, detail="Container not found")
 
     frontend_url = os.getenv("FRONTEND_URL", f"http://localhost:5173/scan/{qr_code}")
