@@ -15,6 +15,10 @@
   ] as const;
   const DETAIL_SUGGESTIONS = ['Condition', 'Volume', 'Size', 'Notes', 'Color', 'Value', 'Serial Number'];
   type DetailMode = 'auto' | 'custom' | 'none';
+  type ContainerSummary = {
+    qr_code: string;
+    name: string;
+  };
 
   const userStore = activeUser;
 
@@ -32,9 +36,19 @@
   let exportBusy = false;
   let exportError = '';
   let exportSuccess = '';
+  let availableContainers: ContainerSummary[] = [];
+  let selectedContainerQrs: string[] = [];
+  let containersLoading = false;
+  let containersError = '';
+  let containersLoaded = false;
 
   $: activePersona = $activeUser ?? null;
   $: canView = hasPermission(activePersona, PERMISSIONS.view);
+  $: {
+    if (canView && activePersona?.id && !containersLoaded && !containersLoading) {
+      void loadContainers();
+    }
+  }
 
   function authHeaders() {
     const user = get(userStore);
@@ -56,6 +70,35 @@
       .split(',')
       .map((token) => token.trim())
       .filter((token) => Boolean(token));
+  }
+
+  async function loadContainers() {
+    containersLoading = true;
+    containersError = '';
+
+    try {
+      const res = await fetch(`${API_URL}/containers`, {
+        headers: authHeaders()
+      });
+      if (!res.ok) {
+        throw new Error('Unable to load containers');
+      }
+
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        availableContainers = data.map((container) => ({
+          qr_code: container.qr_code,
+          name: container.name
+        }));
+      } else {
+        availableContainers = [];
+      }
+      containersLoaded = true;
+    } catch (err) {
+      containersError = err instanceof Error ? err.message : 'Unable to load containers';
+    } finally {
+      containersLoading = false;
+    }
   }
 
   async function downloadExport() {
@@ -122,6 +165,10 @@
         );
       }
 
+      if (selectedContainerQrs.length) {
+        selectedContainerQrs.forEach((qr) => params.append('container_qr', qr));
+      }
+
       const query = params.toString();
       const url = query ? `${API_URL}/containers/export?${query}` : `${API_URL}/containers/export`;
 
@@ -162,6 +209,43 @@
   <p class="intro">
     Build a CSV of all containers or filter down to just the rows and columns you care about.
   </p>
+
+  <section class="card">
+    <div class="section-header">
+      <div>
+        <h2>Containers</h2>
+        <p class="muted">
+          Optionally pick specific containers to export. Leave all unchecked to include everything.
+        </p>
+      </div>
+    </div>
+
+    {#if containersLoading}
+      <p class="muted">Loading containers...</p>
+    {:else if containersError}
+      <p class="error">{containersError}</p>
+    {:else if availableContainers.length}
+      <div class="container-list">
+        {#each availableContainers as container}
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={selectedContainerQrs.includes(container.qr_code)}
+              onchange={() => {
+                selectedContainerQrs = toggleField(selectedContainerQrs, container.qr_code);
+              }}
+            />
+            <span class="container-label">
+              <span class="container-qr">{container.qr_code}</span>
+              <span class="container-name">{container.name}</span>
+            </span>
+          </label>
+        {/each}
+      </div>
+    {:else}
+      <p class="muted">No containers available to export yet.</p>
+    {/if}
+  </section>
 
   <section class="card">
     <div class="section-header">
@@ -371,6 +455,29 @@
     display: flex;
     flex-wrap: wrap;
     gap: 24px;
+  }
+
+  .container-list {
+    display: grid;
+    gap: 10px;
+    max-height: 280px;
+    overflow: auto;
+    padding-right: 4px;
+  }
+
+  .container-label {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .container-qr {
+    font-weight: 600;
+  }
+
+  .container-name {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
   }
 
   .field-label {

@@ -256,6 +256,20 @@ def normalize_detail_keys(keys: Optional[List[str]]) -> Tuple[List[str], bool]:
     return normalized, True
 
 
+def normalize_qr_codes(values: Optional[List[str]]) -> List[str]:
+    if not values:
+        return []
+
+    normalized: List[str] = []
+    seen = set()
+    for value in values:
+        trimmed = value.strip()
+        if trimmed and trimmed not in seen:
+            normalized.append(trimmed)
+            seen.add(trimmed)
+    return normalized
+
+
 def parse_item_filters(raw_filters: Optional[List[str]]) -> List[Tuple[str, str]]:
     parsed: List[Tuple[str, str]] = []
     if not raw_filters:
@@ -363,6 +377,7 @@ def export_containers_csv(
     item_fields: Optional[List[str]] = Query(default=None),
     detail_keys: Optional[List[str]] = Query(default=None),
     item_filter: Optional[List[str]] = Query(default=None),
+    container_qr: Optional[List[str]] = Query(default=None),
     current_user: MockUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -377,6 +392,8 @@ def export_containers_csv(
     normalized_detail_keys, detail_keys_requested = normalize_detail_keys(detail_keys)
     filters = parse_item_filters(item_filter)
     has_filters = bool(filters)
+    selected_qr_codes = normalize_qr_codes(container_qr)
+    selected_qr_set = set(selected_qr_codes)
 
     prepared_rows: List[Tuple[Container, Optional[Item]]] = []
     auto_detail_keys: List[str] = []
@@ -385,6 +402,10 @@ def export_containers_csv(
 
     records = crud.list_containers(db)
     containers_list = [container_model_to_schema(record) for record in records]
+    if selected_qr_set:
+        containers_list = [
+            container for container in containers_list if container.qr_code in selected_qr_set
+        ]
 
     for container in containers_list:
         contents = list(container.contents or [])

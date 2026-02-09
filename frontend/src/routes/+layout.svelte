@@ -179,7 +179,7 @@
         class="nav-link"
         href="/"
         class:active={$pageStore.url.pathname === '/'}
-      >Dashboard</a>
+      >Main Menu</a>
       {#if $canCreate}
         <a
           class="nav-link"
@@ -522,24 +522,24 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 6px;
-    padding: 8px 12px;
-    border-radius: 12px;
+    gap: 4px;
+    padding: 6px 10px;
+    border-radius: 10px;
     border: 1px solid rgba(246, 246, 246, 0.35);
-    background: rgba(246, 246, 246, 0.08);
+    background: rgba(246, 246, 246, 0.05);
     color: var(--color-header-active);
-    min-width: 220px;
+    min-width: 180px;
   }
 
   .admin-panel__title {
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
 
   .admin-panel__label {
-    font-size: 0.8rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -556,8 +556,9 @@
     border: 1px solid rgba(246, 246, 246, 0.35);
     background: rgba(30, 36, 48, 0.4);
     color: var(--color-header-active);
-    padding: 6px 10px;
+    padding: 4px 8px;
     width: 100%;
+    font-size: 0.85rem;
   }
 
   .admin-panel select:disabled {
@@ -1006,7 +1007,7 @@ async function handleRoleChange(event: Event) {
         class="nav-link"
         href="/"
         class:active={$pageStore.url.pathname === '/'}
-      >Dashboard</a>
+      >Main Menu</a>
       {#if $canCreate}
         <a
           class="nav-link"
@@ -1337,24 +1338,24 @@ async function handleRoleChange(event: Event) {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 6px;
-    padding: 8px 12px;
-    border-radius: 12px;
+    gap: 4px;
+    padding: 6px 10px;
+    border-radius: 10px;
     border: 1px solid rgba(246, 246, 246, 0.35);
-    background: rgba(246, 246, 246, 0.08);
+    background: rgba(246, 246, 246, 0.05);
     color: var(--color-header-active);
-    min-width: 220px;
+    min-width: 180px;
   }
 
   .admin-panel__title {
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
 
   .admin-panel__label {
-    font-size: 0.8rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -1371,8 +1372,9 @@ async function handleRoleChange(event: Event) {
     border: 1px solid rgba(246, 246, 246, 0.35);
     background: rgba(30, 36, 48, 0.4);
     color: var(--color-header-active);
-    padding: 6px 10px;
+    padding: 4px 8px;
     width: 100%;
+    font-size: 0.85rem;
   }
 
   .admin-panel select:disabled {

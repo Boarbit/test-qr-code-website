@@ -35,3 +35,12 @@ The Docker stack exposes the frontend to the host machine only:
 - Local: http://localhost:5173/
 
 Open that address in a browser on the same machine that is running Docker to use the app. The port binding intentionally rejects other devices on your network. 
+
+## Feedback Follow-ups
+
+- Added a "Main Menu" nav tab by renaming the Dashboard link (`frontend/src/routes/+layout.svelte`).
+- Quick Load now pulls the latest containers from the API so newly created containers appear (`frontend/src/routes/+page.svelte`).
+- Tightened the "Manage access" panel sizing to be less dominant in the header (`frontend/src/routes/+layout.svelte`).
+- Moved the "View container" results block above the scanner so results appear higher on the dashboard (`frontend/src/routes/+page.svelte`).
+- Renamed "Search All QR Codes" to "Search All Containers" (`frontend/src/routes/+page.svelte`).
+- Export CSV now allows selecting specific containers, with a new `container_qr` filter and UI selection list (`backend/app/main.py`, `frontend/src/routes/export/+page.svelte`).

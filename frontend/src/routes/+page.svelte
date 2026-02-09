@@ -22,13 +22,15 @@
   };
 
   const userStore = activeUser;
-  const SAMPLE_QR_CODES = ['QR123', 'QR456'];
-
   let qrInput = '';
   let container: ContainerDto | null = null;
   let manageLoading = false;
   let manageError = '';
   let manageSuccess = '';
+  let quickLoadContainers: ContainerDto[] = [];
+  let quickLoadLoading = false;
+  let quickLoadError = '';
+  let quickLoadLoaded = false;
 
   let searchQuery = '';
   let searchResults: ContainerDto[] = [];
@@ -51,6 +53,12 @@
   $: canDelete = Boolean(
     hasPermission(activePersona, PERMISSIONS.update) || hasPermission(activePersona, PERMISSIONS.create)
   );
+
+  $: {
+    if (canView && activePersona?.id && !quickLoadLoaded && !quickLoadLoading) {
+      void loadQuickLoadContainers();
+    }
+  }
 
   function authHeaders() {
     const user = get(userStore);
@@ -96,6 +104,32 @@
       manageError = err instanceof Error ? err.message : 'Lookup failed';
     } finally {
       manageLoading = false;
+    }
+  }
+
+  async function loadQuickLoadContainers() {
+    quickLoadLoading = true;
+    quickLoadError = '';
+
+    try {
+      const res = await fetch(`${API_URL}/containers`, {
+        headers: authHeaders()
+      });
+      if (!res.ok) {
+        throw new Error('Unable to load quick load containers');
+      }
+
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        quickLoadContainers = data.slice(0, 6);
+      } else {
+        quickLoadContainers = [];
+      }
+      quickLoadLoaded = true;
+    } catch (err) {
+      quickLoadError = err instanceof Error ? err.message : 'Unable to load quick load containers';
+    } finally {
+      quickLoadLoading = false;
     }
   }
 
@@ -287,16 +321,24 @@
 
       <div class="quick-links">
         <span>Quick load:</span>
-        {#each SAMPLE_QR_CODES as code}
-          <button
-            type="button"
-            class="link-button"
-            onclick={() => {
-              qrInput = code;
-              fetchContainer(code);
-            }}
-          >{code}</button>
-        {/each}
+        {#if quickLoadLoading}
+          <span class="muted">Loading...</span>
+        {:else if quickLoadError}
+          <span class="muted">{quickLoadError}</span>
+        {:else if quickLoadContainers.length}
+          {#each quickLoadContainers as entry}
+            <button
+              type="button"
+              class="link-button"
+              onclick={() => {
+                qrInput = entry.qr_code;
+                fetchContainer(entry.qr_code);
+              }}
+            >{entry.qr_code}</button>
+          {/each}
+        {:else}
+          <span class="muted">No containers yet.</span>
+        {/if}
       </div>
 
       {#if deleteError}
@@ -304,20 +346,6 @@
       {:else if deleteSuccess}
         <p class="success">{deleteSuccess}</p>
       {/if}
-
-      <QrScanner
-        title="Scan to load a container"
-        description="Use your camera to scan a QR label and auto-fill the code above."
-        on:detect={(event) => handleScannerResult(event.detail.text)}
-      >
-        <svelte:fragment slot="tips">
-          <ul>
-            <li>Center the QR label and hold still until it focuses.</li>
-            <li>Once detected, we’ll look up the container automatically.</li>
-            <li>Need a sample? Try the quick load buttons above.</li>
-          </ul>
-        </svelte:fragment>
-      </QrScanner>
 
       {#if manageLoading}
         <p class="info">Looking up container...</p>
@@ -364,6 +392,20 @@
         </div>
       {/if}
 
+      <QrScanner
+        title="Scan to load a container"
+        description="Use your camera to scan a QR label and auto-fill the code above."
+        on:detect={(event) => handleScannerResult(event.detail.text)}
+      >
+        <svelte:fragment slot="tips">
+          <ul>
+            <li>Center the QR label and hold still until it focuses.</li>
+            <li>Once detected, we’ll look up the container automatically.</li>
+            <li>Need a sample? Try the quick load buttons above.</li>
+          </ul>
+        </svelte:fragment>
+      </QrScanner>
+
       <p class="cta">
         Need to add a new container?
         {#if canCreate}
@@ -375,7 +417,7 @@
     </section>
 
     <section class="card search-card">
-      <h2>Search All QR Codes</h2>
+      <h2>Search All Containers</h2>
       <p class="card-subtitle">Find containers by label, contents, or QR code.</p>
 
       <div class="lookup">
